@@ -19,12 +19,12 @@ function lastLogCheckpoint(req, res) {
   }
 
   // winston underlying transport is now configured to be logentries..
-  winston.add(winston.transports.Logentries, { token: ctx.data.LOGENTRIES_TOKEN });
-  
+  winston.add(winston.transports.Logentries, { token: ctx.data.LOGENTRIES_TOKEN, bufferSize: 201 });
+
   // If this is a scheduled task, we'll get the last log checkpoint from the previous run and continue from there.
   req.webtaskContext.storage.get((err, data) => {
     let startCheckpointId = typeof data === 'undefined' ? null : data.checkpointId;
-    
+
     // Start the process.
     async.waterfall([
       (callback) => {

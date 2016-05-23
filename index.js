@@ -6,8 +6,7 @@ const Webtask = require('webtask-tools');
 const app = express();
 const Request = require('superagent');
 const memoizer = require('lru-memoizer');
-const Logger = require('le_node');
-const winston = require('winston');
+const Logentries = require('logs-to-logentries');
 
 function lastLogCheckpoint(req, res) {
   let ctx = req.webtaskContext;
@@ -15,11 +14,15 @@ function lastLogCheckpoint(req, res) {
   let missing_settings = required_settings.filter((setting) => !ctx.data[setting]);
 
   if (missing_settings.length) {
-    return res.status(400).send({ message: 'Missing settings: ' + missing_settings.join(', ') });
+    return res.status(400).send({message: 'Missing settings: ' + missing_settings.join(', ')});
   }
 
-  // winston underlying transport is now configured to be logentries..
-  winston.add(winston.transports.Logentries, { token: ctx.data.LOGENTRIES_TOKEN, bufferSize: 201 });
+  // SETUP LOGENTRIES CLIENT
+  const endpoint = 'https://webhook.logentries.com/noformat/logs/',
+    logentriesToken = ctx.data.LOGENTRIES_TOKEN,
+    logentries = Logentries.createClient({
+      url: endpoint + logentriesToken
+    });
 
   // If this is a scheduled task, we'll get the last log checkpoint from the previous run and continue from there.
   req.webtaskContext.storage.get((err, data) => {
@@ -53,7 +56,7 @@ function lastLogCheckpoint(req, res) {
           });
         };
 
-        getLogs({ checkpointId: startCheckpointId });
+        getLogs({checkpointId: startCheckpointId});
       },
       (context, callback) => {
         const min_log_level = parseInt(ctx.data.LOG_LEVEL) || 0;
@@ -86,7 +89,8 @@ function lastLogCheckpoint(req, res) {
           console.log(`Uploading ${url}.`);
 
           // logentries here...
-          winston.info(JSON.stringify(log), cb);
+          logentries.log(JSON.stringify(log), cb);
+
         }, (err) => {
           if (err) {
             return callback(err);
@@ -100,7 +104,7 @@ function lastLogCheckpoint(req, res) {
       if (err) {
         console.log('Job failed.');
 
-        return req.webtaskContext.storage.set({ checkpointId: startCheckpointId }, { force: 1 }, (error) => {
+        return req.webtaskContext.storage.set({checkpointId: startCheckpointId}, {force: 1}, (error) => {
           if (error) {
             console.log('Error storing startCheckpoint', error);
             return res.status(500).send({error: error});
@@ -117,7 +121,7 @@ function lastLogCheckpoint(req, res) {
       return req.webtaskContext.storage.set({
         checkpointId: context.checkpointId,
         totalLogsProcessed: context.logs.length
-      }, { force: 1 }, (error) => {
+      }, {force: 1}, (error) => {
         if (error) {
           console.log('Error storing checkpoint', error);
           return res.status(500).send({error: error});
@@ -287,17 +291,17 @@ const logTypes = {
   }
 };
 
-function getLogsFromAuth0 (domain, token, take, from, cb) {
+function getLogsFromAuth0(domain, token, take, from, cb) {
   var url = `https://${domain}/api/v2/logs`;
 
   Request
     .get(url)
     .set('Authorization', `Bearer ${token}`)
     .set('Accept', 'application/json')
-    .query({ take: take })
-    .query({ from: from })
-    .query({ sort: 'date:1' })
-    .query({ per_page: take })
+    .query({take: take})
+    .query({from: from})
+    .query({sort: 'date:1'})
+    .query({per_page: take})
     .end(function (err, res) {
       if (err || !res.ok) {
         console.log('Error getting logs', err);
@@ -336,9 +340,9 @@ const getTokenCached = memoizer({
 });
 
 app.use(function (req, res, next) {
-  var apiUrl       = `https://${req.webtaskContext.data.AUTH0_DOMAIN}/oauth/token`;
-  var audience     = `https://${req.webtaskContext.data.AUTH0_DOMAIN}/api/v2/`;
-  var clientId     = req.webtaskContext.data.AUTH0_CLIENT_ID;
+  var apiUrl = `https://${req.webtaskContext.data.AUTH0_DOMAIN}/oauth/token`;
+  var audience = `https://${req.webtaskContext.data.AUTH0_DOMAIN}/api/v2/`;
+  var clientId = req.webtaskContext.data.AUTH0_CLIENT_ID;
   var clientSecret = req.webtaskContext.data.AUTH0_CLIENT_SECRET;
 
   getTokenCached(apiUrl, audience, clientId, clientSecret, function (access_token, err) {

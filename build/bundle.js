@@ -55,8 +55,7 @@ module.exports =
 	var app = express();
 	var Request = __webpack_require__(13);
 	var memoizer = __webpack_require__(16);
-	var Logger = __webpack_require__(22);
-	var winston = __webpack_require__(23);
+	var Logentries = __webpack_require__(19);
 
 	function lastLogCheckpoint(req, res) {
 	  var ctx = req.webtaskContext;
@@ -69,8 +68,12 @@ module.exports =
 	    return res.status(400).send({ message: 'Missing settings: ' + missing_settings.join(', ') });
 	  }
 
-	  // winston underlying transport is now configured to be logentries..
-	  winston.add(winston.transports.Logentries, { token: ctx.data.LOGENTRIES_TOKEN, bufferSize: 201 });
+	  // SETUP LOGENTRIES CLIENT
+	  var endpoint = 'https://webhook.logentries.com/noformat/logs/',
+	      logentriesToken = ctx.data.LOGENTRIES_TOKEN,
+	      logentries = Logentries.createClient({
+	    url: endpoint + logentriesToken
+	  });
 
 	  // If this is a scheduled task, we'll get the last log checkpoint from the previous run and continue from there.
 	  req.webtaskContext.storage.get(function (err, data) {
@@ -135,7 +138,7 @@ module.exports =
 	        console.log('Uploading ' + url + '.');
 
 	        // logentries here...
-	        winston.info(JSON.stringify(log), cb);
+	        logentries.log(JSON.stringify(log), cb);
 	      }, function (err) {
 	        if (err) {
 	          return callback(err);
@@ -1041,13 +1044,16 @@ module.exports =
 	const LRU        = __webpack_require__(17);
 	const _          = __webpack_require__(18);
 	const lru_params = [ 'max', 'maxAge', 'length', 'dispose', 'stale' ];
-	const Lock       = __webpack_require__(19);
 
 	module.exports = function (options) {
 	  const cache = new LRU(_.pick(options, lru_params));
 	  const load  = options.load;
 	  const hash  = options.hash;
-	  const lock  = Lock();
+	  const loading  = new Map();
+
+	  if (options.disable) {
+	    return options.load;
+	  }
 
 	  const result = function () {
 	    const args       = _.toArray(arguments);
@@ -1063,27 +1069,36 @@ module.exports =
 	      key = hash.apply(options, parameters);
 	    }
 
-	    lock(key, function (release) {
-	      const release_and_callback = release(callback);
+	    var fromCache = cache.get(key);
 
-	      var fromCache = cache.get(key);
+	    if (fromCache) {
+	      return callback.apply(null, [null].concat(fromCache));
+	    }
 
-	      if (fromCache) {
-	        return release_and_callback.apply(null, [null].concat(fromCache));
-	      }
+	    if (!loading.get(key)) {
+	      loading.set(key, []);
 
 	      load.apply(null, parameters.concat(function (err) {
-	        if (err) {
-	          return release_and_callback(err);
+	        const args = _.toArray(arguments);
+
+	        //we store the result only if the load didn't fail.
+	        if (!err) {
+	          cache.set(key, args.slice(1));
 	        }
 
-	        cache.set(key, _.toArray(arguments).slice(1));
+	        //immediately call every other callback waiting
+	        loading.get(key).forEach(function (callback) {
+	          callback.apply(null, args);
+	        });
 
-	        return release_and_callback.apply(null, arguments);
+	        loading.delete(key);
+	        /////////
 
+	        callback.apply(null, args);
 	      }));
-	    });
-
+	    } else {
+	      loading.get(key).push(callback);
+	    }
 	  };
 
 	  result.keys = cache.keys.bind(cache);
@@ -1137,281 +1152,306 @@ module.exports =
 /* 19 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(setImmediate) {module.exports = function () {
+	'use strict';
 
-	  var locked = {}
+	var logentries = exports;
 
-	  function _releaser (key, exec) {
-	    return function (done) {
-	      return function () {
-	      _release(key, exec)
-	      if (done) done.apply(null, arguments)
-	      }
-	    }
-	  }
+	logentries.createClient = __webpack_require__(20).createClient;
 
-	  function _release (key, exec) {
-	    var i = locked[key].indexOf(exec) //should usually be 0
 
-	    if(!~i) return
-
-	    locked[key].splice(i, 1)
-
-	    //note, that the next locker isn't triggered until next tick,
-	    //so it's always after the released callback
-	    if(isLocked(key))
-	      setImmediate(function () {
-	        locked[key][0](_releaser(key, locked[key][0]))
-	      })
-	    else
-	      delete locked[key]
-	  }
-
-	  function _lock(key, exec) {
-	    if(isLocked(key))
-	      return locked[key].push(exec), false
-	    return locked[key] = [exec], true
-	  }
-
-	  function lock(key, exec) {
-	    if(Array.isArray(key)) {
-	      var keys = key.length, locks = []
-	      var l = {}
-
-	      function releaser (done) {
-	        return function () {
-	          var args = [].slice.call(arguments)
-	          for(var key in l)
-	            _release(key, l[key])
-	          done.apply(this, args)
-	        }
-	      }
-
-	      key.forEach(function (key) {
-	        var n = 0
-
-	        function ready () {
-	          if(n++) return
-	          if(!--keys)
-	            //all the keys are ready!
-	            exec(releaser)
-	        }
-
-	        l[key] = ready
-	        if(_lock(key, ready)) ready()
-	      })
-
-	      return
-	    }
-
-	    if(_lock(key, exec))
-	      exec(_releaser(key, exec))
-	  }
-
-	  function isLocked (key) {
-	    return Array.isArray(locked[key]) ? !! locked[key].length : false
-	  }
-
-	  lock.isLocked = isLocked
-
-	  return lock
-	}
-
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(20).setImmediate))
 
 /***/ },
 /* 20 */
 /***/ function(module, exports, __webpack_require__) {
 
-	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(21).nextTick;
-	var apply = Function.prototype.apply;
-	var slice = Array.prototype.slice;
-	var immediateIds = {};
-	var nextImmediateId = 0;
+	'use strict';
 
-	// DOM APIs, for completeness
+	var events = __webpack_require__(21),
+	  util = __webpack_require__(22),
+	  common = __webpack_require__(23),
+	  logentries = __webpack_require__(19),
+	  stringifySafe = __webpack_require__(25);
 
-	exports.setTimeout = function() {
-	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
-	};
-	exports.setInterval = function() {
-	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
-	};
-	exports.clearTimeout =
-	exports.clearInterval = function(timeout) { timeout.close(); };
+	function stringify(msg) {
+	  var payload;
 
-	function Timeout(id, clearFn) {
-	  this._id = id;
-	  this._clearFn = clearFn;
-	}
-	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
-	Timeout.prototype.close = function() {
-	  this._clearFn.call(window, this._id);
-	};
-
-	// Does not start the time, just sets up the members needed.
-	exports.enroll = function(item, msecs) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = msecs;
-	};
-
-	exports.unenroll = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-	  item._idleTimeout = -1;
-	};
-
-	exports._unrefActive = exports.active = function(item) {
-	  clearTimeout(item._idleTimeoutId);
-
-	  var msecs = item._idleTimeout;
-	  if (msecs >= 0) {
-	    item._idleTimeoutId = setTimeout(function onTimeout() {
-	      if (item._onTimeout)
-	        item._onTimeout();
-	    }, msecs);
+	  try {
+	    payload = JSON.stringify(msg)
 	  }
+	  catch (ex) {
+	    payload = stringifySafe(msg, null, null, noop)
+	  }
+
+	  return payload;
+	}
+
+	exports.createClient = function (options) {
+	  return new Logentries(options);
 	};
 
-	// That's not how node.js implements it but the exposed api is the same.
-	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
-	  var id = nextImmediateId++;
-	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
+	var Logentries = exports.Logentries = function (options) {
 
-	  immediateIds[id] = true;
+	  if (!options || !options.url) {
+	    throw new Error('options.url is required.');
+	  }
 
-	  nextTick(function onNextTick() {
-	    if (immediateIds[id]) {
-	      // fn.call() is faster so we optimize for the common use-case
-	      // @see http://jsperf.com/call-apply-segu
-	      if (args) {
-	        fn.apply(null, args);
-	      } else {
-	        fn.call(null);
+	  events.EventEmitter.call(this);
+
+	  this.url = options.url;
+	  this.json = options.json || null;
+	  this.auth = options.auth || null;
+	  this.proxy = options.proxy || null;
+	  this.userAgent = 'logs-to-logentries ' + logentries.version;
+
+	};
+
+	util.inherits(Logentries, events.EventEmitter);
+
+	Logentries.prototype.log = function (msg, callback) {
+
+	  var self = this,
+	    logOptions;
+
+	  var isBulk = Array.isArray(msg);
+
+	  // DISABLE BULK FOR NOW...
+	  if (isBulk) {
+	    throw Error('Bulk not supported at this time due to restrictions on POST size limit by logentries');
+	  }
+
+	  function serialize(msg) {
+	    if (msg instanceof Object) {
+	      return self.json ? stringify(msg) : common.serialize(msg);
+	    }
+	    else {
+	      return self.json ? stringify({message: msg}) : msg;
+	    }
+	  }
+
+	  msg = isBulk ? msg.map(serialize).join('\n') : serialize(msg);
+	  msg = serialize(msg);
+
+	  logOptions = {
+	    uri: this.url,
+	    method: 'POST',
+	    body: msg,
+	    proxy: this.proxy,
+	    headers: {
+	      host: this.host,
+	      accept: '*/*',
+	      'user-agent': this.userAgent,
+	      'content-type': this.json ? 'application/json' : 'text/plain',
+	      'content-length': Buffer.byteLength(msg)
+	    }
+	  };
+
+	  common.logentries(logOptions, callback, function (res, body) {
+	    try {
+	      var result = '';
+	      if (body) {
+	        try {
+	          result = JSON.parse(body);
+	        } catch (e) {
+	          // do nothing
+	          console.error(e);
+	        }
 	      }
-	      // Prevent ids from leaking
-	      exports.clearImmediate(id);
+	      self.emit('log', result);
+	      if (callback) {
+	        callback(null, result);
+	      }
+	    } catch (ex) {
+	      if (callback) {
+	        callback(new Error('Unspecified error from Logentries: ' + ex));
+	      }
 	    }
 	  });
 
-	  return id;
+	  return this;
 	};
 
-	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
-	  delete immediateIds[id];
-	};
-	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(20).setImmediate, __webpack_require__(20).clearImmediate))
+
+
 
 /***/ },
 /* 21 */
 /***/ function(module, exports) {
 
-	// shim for using process in browser
-
-	var process = module.exports = {};
-	var queue = [];
-	var draining = false;
-	var currentQueue;
-	var queueIndex = -1;
-
-	function cleanUpNextTick() {
-	    if (!draining || !currentQueue) {
-	        return;
-	    }
-	    draining = false;
-	    if (currentQueue.length) {
-	        queue = currentQueue.concat(queue);
-	    } else {
-	        queueIndex = -1;
-	    }
-	    if (queue.length) {
-	        drainQueue();
-	    }
-	}
-
-	function drainQueue() {
-	    if (draining) {
-	        return;
-	    }
-	    var timeout = setTimeout(cleanUpNextTick);
-	    draining = true;
-
-	    var len = queue.length;
-	    while(len) {
-	        currentQueue = queue;
-	        queue = [];
-	        while (++queueIndex < len) {
-	            if (currentQueue) {
-	                currentQueue[queueIndex].run();
-	            }
-	        }
-	        queueIndex = -1;
-	        len = queue.length;
-	    }
-	    currentQueue = null;
-	    draining = false;
-	    clearTimeout(timeout);
-	}
-
-	process.nextTick = function (fun) {
-	    var args = new Array(arguments.length - 1);
-	    if (arguments.length > 1) {
-	        for (var i = 1; i < arguments.length; i++) {
-	            args[i - 1] = arguments[i];
-	        }
-	    }
-	    queue.push(new Item(fun, args));
-	    if (queue.length === 1 && !draining) {
-	        setTimeout(drainQueue, 0);
-	    }
-	};
-
-	// v8 likes predictible objects
-	function Item(fun, array) {
-	    this.fun = fun;
-	    this.array = array;
-	}
-	Item.prototype.run = function () {
-	    this.fun.apply(null, this.array);
-	};
-	process.title = 'browser';
-	process.browser = true;
-	process.env = {};
-	process.argv = [];
-	process.version = ''; // empty string to avoid regexp issues
-	process.versions = {};
-
-	function noop() {}
-
-	process.on = noop;
-	process.addListener = noop;
-	process.once = noop;
-	process.off = noop;
-	process.removeListener = noop;
-	process.removeAllListeners = noop;
-	process.emit = noop;
-
-	process.binding = function (name) {
-	    throw new Error('process.binding is not supported');
-	};
-
-	process.cwd = function () { return '/' };
-	process.chdir = function (dir) {
-	    throw new Error('process.chdir is not supported');
-	};
-	process.umask = function() { return 0; };
-
+	module.exports = require("events");
 
 /***/ },
 /* 22 */
 /***/ function(module, exports) {
 
-	module.exports = require("le_node");
+	module.exports = require("util");
 
 /***/ },
 /* 23 */
+/***/ function(module, exports, __webpack_require__) {
+
+	var https = __webpack_require__(24),
+	  util = __webpack_require__(22),
+	  request = __webpack_require__(15),
+	  logentries = __webpack_require__(19);
+
+	var common = exports;
+
+	var failCodes = common.failCodes = {
+	  400: 'Bad Request',
+	  401: 'Unauthorized',
+	  403: 'Forbidden',
+	  404: 'Not Found',
+	  409: 'Conflict / Duplicate',
+	  410: 'Gone',
+	  500: 'Internal Server Error',
+	  501: 'Not Implemented',
+	  503: 'Throttled'
+	};
+
+	common.logentries = function () {
+	  var args = Array.prototype.slice.call(arguments),
+	    success = args.pop(),
+	    callback = args.pop(),
+	    responded,
+	    requestBody,
+	    headers,
+	    method,
+	    auth,
+	    proxy,
+	    uri;
+
+	  if (args.length === 1) {
+	    if (typeof args[0] === 'string') {
+	      //
+	      // If we got a string assume that it's the URI
+	      //
+	      method = 'GET';
+	      uri = args[0];
+	    }
+	    else {
+	      method = args[0].method || 'GET';
+	      uri = args[0].uri;
+	      requestBody = args[0].body;
+	      auth = args[0].auth;
+	      headers = args[0].headers;
+	      proxy = args[0].proxy;
+	    }
+	  }
+	  else if (args.length === 2) {
+	    method = 'GET';
+	    uri = args[0];
+	    auth = args[1];
+	  }
+	  else {
+	    method = args[0];
+	    uri = args[1];
+	    auth = args[2];
+	  }
+
+	  function onError(err) {
+	    if (!responded) {
+	      responded = true;
+	      if (callback) {
+	        callback(err)
+	      }
+	    }
+	  }
+
+	  var requestOptions = {
+	    uri: uri,
+	    method: method,
+	    headers: headers || {},
+	    proxy: proxy
+	  };
+
+	  if (auth) {
+	    requestOptions.headers.authorization = 'Basic ' + new Buffer(auth.username + ':' + auth.password).toString('base64');
+	  }
+
+	  if (requestBody) {
+	    requestOptions.body = requestBody;
+	  }
+
+	  try {
+	    request(requestOptions, function (err, res, body) {
+	      if (err) {
+	        return onError(err);
+	      }
+	      var statusCode = res.statusCode.toString();
+	      if (Object.keys(failCodes).indexOf(statusCode) !== -1) {
+	        return onError((new Error('Logentries Error (' + statusCode + ')')));
+	      }
+	      success(res, body);
+	    });
+	  }
+	  catch (ex) {
+	    onError(ex);
+	  }
+	};
+
+	common.serialize = function (obj, key) {
+	  if (obj === null) {
+	    obj = 'null';
+	  }
+	  else if (obj === undefined) {
+	    obj = 'undefined';
+	  }
+	  else if (obj === false) {
+	    obj = 'false';
+	  }
+
+	  if (typeof obj !== 'object') {
+	    return key ? key + '=' + obj : obj;
+	  }
+
+	  var msg = '',
+	    keys = Object.keys(obj),
+	    length = keys.length;
+
+	  for (var i = 0; i < length; i++) {
+	    if (Array.isArray(obj[keys[i]])) {
+	      msg += keys[i] + '=[';
+
+	      for (var j = 0, l = obj[keys[i]].length; j < l; j++) {
+	        msg += common.serialize(obj[keys[i]][j]);
+	        if (j < l - 1) {
+	          msg += ', ';
+	        }
+	      }
+
+	      msg += ']';
+	    }
+	    else {
+	      msg += common.serialize(obj[keys[i]], keys[i]);
+	    }
+
+	    if (i < length - 1) {
+	      msg += ', ';
+	    }
+	  }
+	  return msg;
+	};
+
+	common.clone = function (obj) {
+	  var clone = {};
+	  for (var i in obj) {
+	    clone[i] = obj[i] instanceof Object ? common.clone(obj[i]) : obj[i];
+	  }
+	  return clone;
+	};
+
+
+/***/ },
+/* 24 */
 /***/ function(module, exports) {
 
-	module.exports = require("winston");
+	module.exports = require("https");
+
+/***/ },
+/* 25 */
+/***/ function(module, exports) {
+
+	module.exports = require("json-stringify-safe");
 
 /***/ }
 /******/ ]);

@@ -55,7 +55,7 @@ module.exports =
 	var app = express();
 	var Request = __webpack_require__(13);
 	var memoizer = __webpack_require__(16);
-	var Logentries = __webpack_require__(19);
+	var Logentries = __webpack_require__(22);
 
 	function lastLogCheckpoint(req, res) {
 	  var ctx = req.webtaskContext;
@@ -1044,16 +1044,13 @@ module.exports =
 	const LRU        = __webpack_require__(17);
 	const _          = __webpack_require__(18);
 	const lru_params = [ 'max', 'maxAge', 'length', 'dispose', 'stale' ];
+	const Lock       = __webpack_require__(19);
 
 	module.exports = function (options) {
 	  const cache = new LRU(_.pick(options, lru_params));
 	  const load  = options.load;
 	  const hash  = options.hash;
-	  const loading  = new Map();
-
-	  if (options.disable) {
-	    return options.load;
-	  }
+	  const lock  = Lock();
 
 	  const result = function () {
 	    const args       = _.toArray(arguments);
@@ -1069,36 +1066,27 @@ module.exports =
 	      key = hash.apply(options, parameters);
 	    }
 
-	    var fromCache = cache.get(key);
+	    lock(key, function (release) {
+	      const release_and_callback = release(callback);
 
-	    if (fromCache) {
-	      return callback.apply(null, [null].concat(fromCache));
-	    }
+	      var fromCache = cache.get(key);
 
-	    if (!loading.get(key)) {
-	      loading.set(key, []);
+	      if (fromCache) {
+	        return release_and_callback.apply(null, [null].concat(fromCache));
+	      }
 
 	      load.apply(null, parameters.concat(function (err) {
-	        const args = _.toArray(arguments);
-
-	        //we store the result only if the load didn't fail.
-	        if (!err) {
-	          cache.set(key, args.slice(1));
+	        if (err) {
+	          return release_and_callback(err);
 	        }
 
-	        //immediately call every other callback waiting
-	        loading.get(key).forEach(function (callback) {
-	          callback.apply(null, args);
-	        });
+	        cache.set(key, _.toArray(arguments).slice(1));
 
-	        loading.delete(key);
-	        /////////
+	        return release_and_callback.apply(null, arguments);
 
-	        callback.apply(null, args);
 	      }));
-	    } else {
-	      loading.get(key).push(callback);
-	    }
+	    });
+
 	  };
 
 	  result.keys = cache.keys.bind(cache);
@@ -1152,25 +1140,294 @@ module.exports =
 /* 19 */
 /***/ function(module, exports, __webpack_require__) {
 
-	'use strict';
+	/* WEBPACK VAR INJECTION */(function(setImmediate) {module.exports = function () {
 
-	var logentries = exports;
+	  var locked = {}
 
-	logentries.createClient = __webpack_require__(20).createClient;
+	  function _releaser (key, exec) {
+	    return function (done) {
+	      return function () {
+	      _release(key, exec)
+	      if (done) done.apply(null, arguments)
+	      }
+	    }
+	  }
 
+	  function _release (key, exec) {
+	    var i = locked[key].indexOf(exec) //should usually be 0
 
+	    if(!~i) return
+
+	    locked[key].splice(i, 1)
+
+	    //note, that the next locker isn't triggered until next tick,
+	    //so it's always after the released callback
+	    if(isLocked(key))
+	      setImmediate(function () {
+	        locked[key][0](_releaser(key, locked[key][0]))
+	      })
+	    else
+	      delete locked[key]
+	  }
+
+	  function _lock(key, exec) {
+	    if(isLocked(key))
+	      return locked[key].push(exec), false
+	    return locked[key] = [exec], true
+	  }
+
+	  function lock(key, exec) {
+	    if(Array.isArray(key)) {
+	      var keys = key.length, locks = []
+	      var l = {}
+
+	      function releaser (done) {
+	        return function () {
+	          var args = [].slice.call(arguments)
+	          for(var key in l)
+	            _release(key, l[key])
+	          done.apply(this, args)
+	        }
+	      }
+
+	      key.forEach(function (key) {
+	        var n = 0
+
+	        function ready () {
+	          if(n++) return
+	          if(!--keys)
+	            //all the keys are ready!
+	            exec(releaser)
+	        }
+
+	        l[key] = ready
+	        if(_lock(key, ready)) ready()
+	      })
+
+	      return
+	    }
+
+	    if(_lock(key, exec))
+	      exec(_releaser(key, exec))
+	  }
+
+	  function isLocked (key) {
+	    return Array.isArray(locked[key]) ? !! locked[key].length : false
+	  }
+
+	  lock.isLocked = isLocked
+
+	  return lock
+	}
+
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(20).setImmediate))
 
 /***/ },
 /* 20 */
 /***/ function(module, exports, __webpack_require__) {
 
+	/* WEBPACK VAR INJECTION */(function(setImmediate, clearImmediate) {var nextTick = __webpack_require__(21).nextTick;
+	var apply = Function.prototype.apply;
+	var slice = Array.prototype.slice;
+	var immediateIds = {};
+	var nextImmediateId = 0;
+
+	// DOM APIs, for completeness
+
+	exports.setTimeout = function() {
+	  return new Timeout(apply.call(setTimeout, window, arguments), clearTimeout);
+	};
+	exports.setInterval = function() {
+	  return new Timeout(apply.call(setInterval, window, arguments), clearInterval);
+	};
+	exports.clearTimeout =
+	exports.clearInterval = function(timeout) { timeout.close(); };
+
+	function Timeout(id, clearFn) {
+	  this._id = id;
+	  this._clearFn = clearFn;
+	}
+	Timeout.prototype.unref = Timeout.prototype.ref = function() {};
+	Timeout.prototype.close = function() {
+	  this._clearFn.call(window, this._id);
+	};
+
+	// Does not start the time, just sets up the members needed.
+	exports.enroll = function(item, msecs) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = msecs;
+	};
+
+	exports.unenroll = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+	  item._idleTimeout = -1;
+	};
+
+	exports._unrefActive = exports.active = function(item) {
+	  clearTimeout(item._idleTimeoutId);
+
+	  var msecs = item._idleTimeout;
+	  if (msecs >= 0) {
+	    item._idleTimeoutId = setTimeout(function onTimeout() {
+	      if (item._onTimeout)
+	        item._onTimeout();
+	    }, msecs);
+	  }
+	};
+
+	// That's not how node.js implements it but the exposed api is the same.
+	exports.setImmediate = typeof setImmediate === "function" ? setImmediate : function(fn) {
+	  var id = nextImmediateId++;
+	  var args = arguments.length < 2 ? false : slice.call(arguments, 1);
+
+	  immediateIds[id] = true;
+
+	  nextTick(function onNextTick() {
+	    if (immediateIds[id]) {
+	      // fn.call() is faster so we optimize for the common use-case
+	      // @see http://jsperf.com/call-apply-segu
+	      if (args) {
+	        fn.apply(null, args);
+	      } else {
+	        fn.call(null);
+	      }
+	      // Prevent ids from leaking
+	      exports.clearImmediate(id);
+	    }
+	  });
+
+	  return id;
+	};
+
+	exports.clearImmediate = typeof clearImmediate === "function" ? clearImmediate : function(id) {
+	  delete immediateIds[id];
+	};
+	/* WEBPACK VAR INJECTION */}.call(exports, __webpack_require__(20).setImmediate, __webpack_require__(20).clearImmediate))
+
+/***/ },
+/* 21 */
+/***/ function(module, exports) {
+
+	// shim for using process in browser
+
+	var process = module.exports = {};
+	var queue = [];
+	var draining = false;
+	var currentQueue;
+	var queueIndex = -1;
+
+	function cleanUpNextTick() {
+	    if (!draining || !currentQueue) {
+	        return;
+	    }
+	    draining = false;
+	    if (currentQueue.length) {
+	        queue = currentQueue.concat(queue);
+	    } else {
+	        queueIndex = -1;
+	    }
+	    if (queue.length) {
+	        drainQueue();
+	    }
+	}
+
+	function drainQueue() {
+	    if (draining) {
+	        return;
+	    }
+	    var timeout = setTimeout(cleanUpNextTick);
+	    draining = true;
+
+	    var len = queue.length;
+	    while(len) {
+	        currentQueue = queue;
+	        queue = [];
+	        while (++queueIndex < len) {
+	            if (currentQueue) {
+	                currentQueue[queueIndex].run();
+	            }
+	        }
+	        queueIndex = -1;
+	        len = queue.length;
+	    }
+	    currentQueue = null;
+	    draining = false;
+	    clearTimeout(timeout);
+	}
+
+	process.nextTick = function (fun) {
+	    var args = new Array(arguments.length - 1);
+	    if (arguments.length > 1) {
+	        for (var i = 1; i < arguments.length; i++) {
+	            args[i - 1] = arguments[i];
+	        }
+	    }
+	    queue.push(new Item(fun, args));
+	    if (queue.length === 1 && !draining) {
+	        setTimeout(drainQueue, 0);
+	    }
+	};
+
+	// v8 likes predictible objects
+	function Item(fun, array) {
+	    this.fun = fun;
+	    this.array = array;
+	}
+	Item.prototype.run = function () {
+	    this.fun.apply(null, this.array);
+	};
+	process.title = 'browser';
+	process.browser = true;
+	process.env = {};
+	process.argv = [];
+	process.version = ''; // empty string to avoid regexp issues
+	process.versions = {};
+
+	function noop() {}
+
+	process.on = noop;
+	process.addListener = noop;
+	process.once = noop;
+	process.off = noop;
+	process.removeListener = noop;
+	process.removeAllListeners = noop;
+	process.emit = noop;
+
+	process.binding = function (name) {
+	    throw new Error('process.binding is not supported');
+	};
+
+	process.cwd = function () { return '/' };
+	process.chdir = function (dir) {
+	    throw new Error('process.chdir is not supported');
+	};
+	process.umask = function() { return 0; };
+
+
+/***/ },
+/* 22 */
+/***/ function(module, exports, __webpack_require__) {
+
 	'use strict';
 
-	var events = __webpack_require__(21),
-	  util = __webpack_require__(22),
-	  common = __webpack_require__(23),
-	  logentries = __webpack_require__(19),
-	  stringifySafe = __webpack_require__(25);
+	var logentries = exports;
+
+	logentries.version = '1.0.0';
+	logentries.createClient = __webpack_require__(23).createClient;
+
+
+
+/***/ },
+/* 23 */
+/***/ function(module, exports, __webpack_require__) {
+
+	'use strict';
+
+	var events = __webpack_require__(24),
+	  util = __webpack_require__(25),
+	  common = __webpack_require__(26),
+	  logentries = __webpack_require__(22),
+	  stringifySafe = __webpack_require__(28);
 
 	function stringify(msg) {
 	  var payload;
@@ -1274,25 +1531,25 @@ module.exports =
 
 
 /***/ },
-/* 21 */
+/* 24 */
 /***/ function(module, exports) {
 
 	module.exports = require("events");
 
 /***/ },
-/* 22 */
+/* 25 */
 /***/ function(module, exports) {
 
 	module.exports = require("util");
 
 /***/ },
-/* 23 */
+/* 26 */
 /***/ function(module, exports, __webpack_require__) {
 
-	var https = __webpack_require__(24),
-	  util = __webpack_require__(22),
+	var https = __webpack_require__(27),
+	  util = __webpack_require__(25),
 	  request = __webpack_require__(15),
-	  logentries = __webpack_require__(19);
+	  logentries = __webpack_require__(22);
 
 	var common = exports;
 
@@ -1442,13 +1699,13 @@ module.exports =
 
 
 /***/ },
-/* 24 */
+/* 27 */
 /***/ function(module, exports) {
 
 	module.exports = require("https");
 
 /***/ },
-/* 25 */
+/* 28 */
 /***/ function(module, exports) {
 
 	module.exports = require("json-stringify-safe");

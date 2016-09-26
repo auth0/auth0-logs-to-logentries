@@ -53,7 +53,7 @@ module.exports =
 	var express = __webpack_require__(4);
 	var Webtask = __webpack_require__(5);
 	var app = express();
-	var Request = __webpack_require__(13);
+	var Request = __webpack_require__(15);
 	var memoizer = __webpack_require__(16);
 	var Logentries = __webpack_require__(22);
 
@@ -340,31 +340,50 @@ module.exports =
 	function getLogsFromAuth0(domain, token, take, from, cb) {
 	  var url = 'https://' + domain + '/api/v2/logs';
 
-	  Request.get(url).set('Authorization', 'Bearer ' + token).set('Accept', 'application/json').query({ take: take }).query({ from: from }).query({ sort: 'date:1' }).query({ per_page: take }).end(function (err, res) {
-	    if (err || !res.ok) {
+	  Request({
+	    method: 'GET',
+	    url: url,
+	    json: true,
+	    qs: {
+	      take: take,
+	      from: from,
+	      sort: 'date:1',
+	      per_page: take
+	    },
+	    headers: {
+	      Authorization: 'Bearer ' + token,
+	      Accept: 'application/json'
+	    }
+	  }, function (err, res, body) {
+	    if (err) {
 	      console.log('Error getting logs', err);
 	      cb(null, err);
 	    } else {
 	      console.log('x-ratelimit-limit: ', res.headers['x-ratelimit-limit']);
 	      console.log('x-ratelimit-remaining: ', res.headers['x-ratelimit-remaining']);
 	      console.log('x-ratelimit-reset: ', res.headers['x-ratelimit-reset']);
-	      cb(res.body);
+	      cb(body);
 	    }
 	  });
 	}
 
 	var getTokenCached = memoizer({
 	  load: function load(apiUrl, audience, clientId, clientSecret, cb) {
-	    Request.post(apiUrl).send({
-	      audience: audience,
-	      grant_type: 'client_credentials',
-	      client_id: clientId,
-	      client_secret: clientSecret
-	    }).type('application/json').end(function (err, res) {
-	      if (err || !res.ok) {
+	    Request({
+	      method: 'POST',
+	      url: apiUrl,
+	      json: true,
+	      body: {
+	        audience: audience,
+	        grant_type: 'client_credentials',
+	        client_id: clientId,
+	        client_secret: clientSecret
+	      }
+	    }, function (err, res, body) {
+	      if (err) {
 	        cb(null, err);
 	      } else {
-	        cb(res.body.access_token);
+	        cb(body.access_token);
 	      }
 	    });
 	  },

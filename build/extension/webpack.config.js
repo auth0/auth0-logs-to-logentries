@@ -42,7 +42,6 @@ module.exports = externalModules.then((externals) => {
   externals.compatible['auth0'] = 'auth0@2.4.0';
   externals.compatible['auth0-oauth2-express'] = 'auth0-oauth2-express@1.1.5';
   externals.compatible['auth0-extension-tools'] = 'auth0-extension-tools@1.2.1';
-  externals.compatible['applicationinsights'] = 'applicationinsights@0.18.0';
   externals.compatible['jwks-rsa'] = 'jwks-rsa@1.1.1';
   externals.compatible['nconf'] = true;
   externals.compatible['node-uuid'] = true;

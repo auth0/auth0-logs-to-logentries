@@ -1,7 +1,7 @@
 {
   "title": "Auth0 Logs to Logentries",
   "name": "auth0-logs-to-logentries",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "auth0",
   "description": "This extension will take all of your Auth0 logs and export them to Logentries",
   "type": "cron",
@@ -22,6 +22,27 @@
     "LOGENTRIES_TOKEN": {
       "description": "Logentries Token",
       "required": true
+    },
+    "START_FROM": {
+      "description": "CheckpointId of log to start with."
+    },
+    "SLACK_INCOMING_WEBHOOK_URL": {
+      "description": "Slack webhook"
+    },
+    "SLACK_SEND_SUCCESS": {
+      "description": "Send success messages to slack?",
+      "type": "select",
+      "allowMultiple": true,
+      "options": [
+        {
+          "value": "No",
+          "text": ""
+        },
+        {
+          "value": "Yes",
+          "text": "true"
+        }
+      ]
     },
     "LOG_LEVEL": {
       "description": "This allows you to specify the log level of events that need to be sent",

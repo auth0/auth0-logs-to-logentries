@@ -8,15 +8,17 @@ const logger = require('../lib/logger');
 
 module.exports = (storage) =>
   (req, res, next) => {
-    if (!req.body || !req.body.schedule || req.body.state !== 'active') {
+    const wtBody = (req.webtaskContext && req.webtaskContext.body) || req.body || {};
+    const wtHead = (req.webtaskContext && req.webtaskContext.headers) || {};
+    const isCron = (wtBody.schedule && wtBody.state === 'active') || (wtHead.referer === 'https://manage.auth0.com/' && wtHead['if-none-match']);
+
+    if (!isCron) {
       return next();
     }
 
     // SETUP LOGENTRIES CLIENT
-    const endpoint = 'https://webhook.logentries.com/noformat/logs/',
-      logentriesToken = config('LOGENTRIES_TOKEN'),
-      logentries = Logentries.createClient({
-        url: endpoint + logentriesToken
+    const logentries = Logentries.createClient({
+        url: `https://webhook.logentries.com/noformat/logs/${config('LOGENTRIES_TOKEN')}`
       });
 
     const onLogsReceived = (logs, callback) => {

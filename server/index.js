@@ -43,15 +43,13 @@ module.exports = (configProvider, storageProvider) => {
 
   app.use(processLogs(storage));
 
-  const rta = config('AUTH0_RTA').replace('https://', '');
-  const baseUrl = (rta === 'auth0.auth0.com') ? config('PUBLIC_WT_URL') : config('WT_URL');
 
   app.use(expressTools.routes.dashboardAdmins({
     secret: config('EXTENSION_SECRET'),
     audience: 'urn:logs-to-logentries',
     domain: config('AUTH0_DOMAIN'),
-    rta,
-    baseUrl,
+    rta: config('AUTH0_RTA').replace('https://', ''),
+    baseUrl: config('WT_URL'),
     clientName: 'Logs to Logentries',
     urlPrefix: '',
     sessionStorageKey: 'logs-to-logentries:apiToken'

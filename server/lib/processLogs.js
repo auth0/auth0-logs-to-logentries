@@ -6,7 +6,7 @@ const loggingTools = require('auth0-log-extension-tools');
 const config = require('../lib/config');
 const logger = require('../lib/logger');
 
-module.exports = (storage) =>
+module.exports = storage =>
   (req, res, next) => {
     const wtBody = (req.webtaskContext && req.webtaskContext.body) || req.body || {};
     const wtHead = (req.webtaskContext && req.webtaskContext.headers) || {};
@@ -18,8 +18,8 @@ module.exports = (storage) =>
 
     // SETUP LOGENTRIES CLIENT
     const logentries = Logentries.createClient({
-        url: `https://webhook.logentries.com/noformat/logs/${config('LOGENTRIES_TOKEN')}`
-      });
+      url: `https://webhook.logentries.com/noformat/logs/${config('LOGENTRIES_TOKEN')}`
+    });
 
     const onLogsReceived = (logs, callback) => {
       if (!logs || !logs.length) {
@@ -28,14 +28,13 @@ module.exports = (storage) =>
 
       logger.info('Uploading blobs...');
 
-      async.eachLimit(logs, 5, (log, cb) => {
+      return async.eachLimit(logs, 5, (log, cb) => {
         const date = moment(log.date);
         const url = `${date.format('YYYY/MM/DD')}/${date.format('HH')}/${log._id}.json`;
         logger.info(`Uploading ${url}.`);
 
         // logentries here...
         logentries.log(JSON.stringify(log), cb);
-
       }, (err) => {
         if (err) {
           return callback(err);
@@ -95,12 +94,12 @@ module.exports = (storage) =>
           if (data.lastReportDate !== now && new Date().getHours() >= reportTime) {
             sendDailyReport(now);
           }
-        })
+        });
     };
 
     return auth0logger
       .run(onLogsReceived)
-      .then(result => {
+      .then((result) => {
         if (result && result.status && result.status.error) {
           slack.send(result.status, result.checkpoint);
         } else if (config('SLACK_SEND_SUCCESS') === true || config('SLACK_SEND_SUCCESS') === 'true') {
@@ -109,7 +108,7 @@ module.exports = (storage) =>
         checkReportTime();
         res.json(result);
       })
-      .catch(err => {
+      .catch((err) => {
         slack.send({ error: err, logsProcessed: 0 }, null);
         checkReportTime();
         next(err);

@@ -8,6 +8,8 @@
   "category": "log_export",
   "initialUrlPath": "/login",
   "repository": "https://github.com/auth0/auth0-logs-to-logentries",
+  "logoUrl": "https://cdn.auth0.com/extensions/auth0-logs-to-logentries/assets/logo.svg",
+  "docsUrl": "https://auth0.com/docs/extensions/logentries",
   "keywords": [
     "auth0",
     "extension"
